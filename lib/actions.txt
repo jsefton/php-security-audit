@@ -1,0 +1,8 @@
+# Action menu for run-on-servers.sh and run-on-servers.ps1.
+# One per line: <script in scripts/> [arguments] | <description>
+check-all.sh --refresh             | Refresh APT lists, then run every check
+php-security-audit.sh --check      | Audit PHP versions
+php-security-audit.sh --upgrade    | Upgrade PHP packages (asks on each server)
+php-upload-progress.sh --check     | Check session.upload_progress.enabled
+php-upload-progress.sh --patch     | Disable it in php.ini (asks on each server)
+nginx-fastcgi-keep-conn.sh --check | Check nginx for fastcgi_keep_conn

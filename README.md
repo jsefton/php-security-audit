@@ -5,20 +5,22 @@ file. `check-all.sh` runs every check in one go and summarises the result.
 
 | Script | Purpose | Changes the server? |
 | --- | --- | --- |
-| [`scripts/check-all.sh`](scripts/check-all.sh) | Run every check below in read-only mode and print a summary | No |
+| [`scripts/check-all.sh`](scripts/check-all.sh) | Run every check below in read-only mode and print a summary | No (`--refresh` refreshes APT lists) |
 | [`scripts/php-security-audit.sh`](scripts/php-security-audit.sh) | Audit APT-installed PHP versions against minimum patched versions | Only with `--upgrade` |
 | [`scripts/php-upload-progress.sh`](scripts/php-upload-progress.sh) | Check `session.upload_progress.enabled` in every `php.ini` | Only with `--patch` |
 | [`scripts/nginx-fastcgi-keep-conn.sh`](scripts/nginx-fastcgi-keep-conn.sh) | Check the loaded nginx configuration for `fastcgi_keep_conn` | No |
 
 All scripts target Ubuntu/Debian and need Bash 4 or later.
 
+To install and run them on several servers from your own machine (Windows,
+Linux or macOS), see [Running on several servers](#running-on-several-servers).
+
 ## Quick start
 
 ```bash
 curl -fsSL https://github.com/jsefton/php-security-audit/archive/refs/heads/main.tar.gz | tar -xz
 cd php-security-audit-main/scripts
-sudo apt-get update      # so the PHP audit sees the latest APT versions
-sudo bash check-all.sh
+sudo bash check-all.sh --refresh
 ```
 
 Then fix what it reports, for example:
@@ -61,6 +63,194 @@ Every script uses the same exit codes, so they work in cron and monitoring.
 
 ---
 
+## Running on several servers
+
+The runner runs on your own machine, not on the servers. For each server
+you pick, it connects over SSH, installs or updates the scripts from
+GitHub, then runs the script you choose there with `sudo`.
+
+| Your machine | Run | Needs |
+| --- | --- | --- |
+| Windows (PowerShell or cmd) | [`run-on-servers.cmd`](run-on-servers.cmd) | Windows PowerShell 5.1 or later and the OpenSSH Client, both built into Windows 10 and 11 |
+| Linux, macOS, Git Bash, WSL | [`run-on-servers.sh`](run-on-servers.sh) | Bash and `ssh` |
+
+Both versions read the same `local/servers.txt`, use the same menu
+([`lib/actions.txt`](lib/actions.txt)) and send the same script to the
+servers ([`lib/remote-run.sh`](lib/remote-run.sh)).
+
+On Windows, `run-on-servers.cmd` starts
+[`run-on-servers.ps1`](run-on-servers.ps1) with PowerShell's execution
+policy bypassed for that run only, since Windows blocks `.ps1` files by
+default. If your execution policy allows scripts, you can run
+`.\run-on-servers.ps1` directly instead. It uses Windows' own
+`ssh.exe`, so it reads `%USERPROFILE%\.ssh\config` and keys loaded in the
+Windows `ssh-agent` service. If the OpenSSH Client is missing, add it under
+Settings > System > Optional features.
+
+### Setup
+
+1. Run it once. It creates `local/servers.txt`; the `local/` folder is
+   ignored by git.
+
+   ```powershell
+   .\run-on-servers.cmd        # Windows
+   ```
+
+   ```bash
+   bash run-on-servers.sh      # Linux, macOS, Git Bash
+   ```
+
+2. Add one server per line: `<host> <user> [port] [name]`.
+
+   ```text
+   203.0.113.10   ubuntu
+   203.0.113.11   deploy   2222   web-2
+   ```
+
+   `host` is an IP address, hostname or a `Host` alias from
+   `~/.ssh/config`. `user` must be `root` or able to run `sudo`. `port`
+   defaults to 22. `name` labels the server in menus and log files and
+   defaults to the host.
+
+3. Check you can `ssh user@host` to each server. Put keys, jump hosts and
+   other SSH settings in `~/.ssh/config` (on Windows,
+   `%USERPROFILE%\.ssh\config`).
+
+### Usage
+
+```powershell
+.\run-on-servers.cmd        # Windows
+```
+
+```bash
+bash run-on-servers.sh      # Linux, macOS, Git Bash
+```
+
+With no options it asks three things:
+
+```text
+Actions:
+   1) check-all.sh --refresh               Refresh APT lists, then run every check
+   2) php-security-audit.sh --check        Audit PHP versions
+   3) php-security-audit.sh --upgrade      Upgrade PHP packages (asks on each server)
+   4) php-upload-progress.sh --check       Check session.upload_progress.enabled
+   5) php-upload-progress.sh --patch       Disable it in php.ini (asks on each server)
+   6) nginx-fastcgi-keep-conn.sh --check   Check nginx for fastcgi_keep_conn
+   7) (update scripts only)                Install or update the scripts; run nothing
+   8) (other)                              Type a script and its arguments
+Choose an action [1]:
+
+Servers (local/servers.txt):
+   1) 203.0.113.10         ubuntu@203.0.113.10
+   2) web-2                deploy@203.0.113.11 port 2222
+Select servers (e.g. 1 3, 2-4, web-1, all) [all]:
+
+Continue? [y/N]
+```
+
+Servers can be picked by number, range, name or host, separated by spaces
+or commas. The same choices can be given as options, to skip the menus:
+
+```powershell
+# Windows
+.\run-on-servers.cmd -Servers all -Action "check-all.sh --refresh"
+.\run-on-servers.cmd -Servers "1,web-2" -Action "php-upload-progress.sh --patch"
+.\run-on-servers.cmd -Servers all -UpdateOnly -Yes
+.\run-on-servers.cmd -List
+```
+
+```bash
+# Linux, macOS, Git Bash
+bash run-on-servers.sh --servers all -- check-all.sh --refresh
+bash run-on-servers.sh --servers 1,web-2 -- php-upload-progress.sh --patch
+bash run-on-servers.sh --servers all --update-only --yes
+bash run-on-servers.sh --list
+```
+
+| Windows | Linux, macOS, Git Bash | Description |
+| --- | --- | --- |
+| `-Servers "LIST"` | `--servers LIST` | Servers to use: `all`, or numbers, ranges, names or hosts separated by commas. On Windows, quote a list that contains commas. |
+| `-Action "SCRIPT ARGS"` | `-- SCRIPT ARGS` | The script in `scripts/` to run and its arguments. |
+| `-UpdateOnly` | `--update-only` | Install or update the scripts without running anything. |
+| `-NoUpdate` | `--no-update` | Run without updating the scripts first. |
+| `-Yes` | `--yes` | Skip the `Continue?` confirmation. The scripts' own prompts are separate: add `--yes` after the script name for those. |
+| `-List` | `--list` | List the servers and exit. |
+| `-Ssh PATH` | | The `ssh.exe` to use. Default: Windows OpenSSH, otherwise `ssh.exe` on `PATH`. |
+
+To change the action menu, edit [`lib/actions.txt`](lib/actions.txt): one
+`<script> [arguments] | <description>` per line.
+
+### What happens on each server
+
+1. The latest scripts are downloaded (with `curl`, or `wget`) to a
+   temporary folder and checked, then replace `~/php-security-audit`. It
+   refuses to replace a folder at that path that is not an install of
+   these scripts.
+2. The chosen script runs as
+   `sudo bash ~/php-security-audit/scripts/<script> <args>` (without
+   `sudo` when you log in as root).
+
+**Servers download what is on GitHub `main`, not your local copy.** Commit
+and push changes before running them on servers. Before it runs anything,
+the runner warns if files in `scripts/` differ from `main` (as of your last
+push or fetch).
+
+Servers are handled one at a time with your terminal attached, so `sudo`
+password prompts and the `[y/N]` prompts of `--upgrade` and `--patch`
+appear as normal: answer them for each server. Without a terminal (for
+example from cron), nothing can be answered, so log in as root or use
+passwordless sudo, and pass `--yes` to `--upgrade` / `--patch`.
+
+Each server needs `bash`, `tar`, `curl` or `wget`, `sudo`, and outbound
+HTTPS access to github.com.
+
+### Results and logs
+
+After the last server it prints a summary:
+
+```text
+========== SUMMARY: check-all.sh --refresh ==========
+OK                203.0.113.10 (ubuntu@203.0.113.10)
+REVIEW REQUIRED   web-2 (deploy@203.0.113.11)
+SSH FAILED        web-3 (ubuntu@203.0.113.12)
+
+Logs: local/logs/20261119-184358
+```
+
+| Result | Meaning |
+| --- | --- |
+| `OK` / `UPDATED` | The script exited `0` (or the update succeeded). |
+| `REVIEW REQUIRED` | The script exited `2`. |
+| `ERROR (exit N)` | The script, the update or `sudo` failed. |
+| `SSH FAILED` | Could not connect or log in (ssh exit code 255). |
+
+Each server's full output is saved in
+`local/logs/<date-time>/<number>-<name>.log`.
+
+Exit code: `1` if any server errored or could not be reached, otherwise
+`2` if any requires review, otherwise `0`.
+
+### Settings
+
+Two environment variables change the defaults:
+
+| Variable | Default |
+| --- | --- |
+| `ARCHIVE_URL` | `https://github.com/jsefton/php-security-audit/archive/refs/heads/main.tar.gz` |
+| `INSTALL_DIR` | `php-security-audit` (relative paths are under the SSH user's home; the user must be able to write to an absolute path such as `/opt/...`) |
+
+For example, to install to `/opt/php-security-audit`:
+
+```powershell
+$env:INSTALL_DIR = '/opt/php-security-audit'; .\run-on-servers.cmd    # Windows
+```
+
+```bash
+INSTALL_DIR=/opt/php-security-audit bash run-on-servers.sh            # Linux, macOS, Git Bash
+```
+
+---
+
 ## check-all.sh
 
 Runs each check script in read-only mode, one after another, showing each
@@ -77,11 +267,18 @@ OK                nginx-fastcgi-keep-conn.sh --check
 
 ```bash
 sudo bash check-all.sh
+
+# Run apt-get update first, so the PHP audit sees the latest package versions
+sudo bash check-all.sh --refresh
 ```
 
 Run it as root: the nginx check needs root to read the full nginx
 configuration and reports an error without it. The script prints a warning
 if it is not run as root.
+
+`--refresh` only refreshes APT's package lists; it installs nothing. If
+`apt-get update` fails, it shows as an `ERROR` row and the other checks
+still run.
 
 | Result | Meaning |
 | --- | --- |
@@ -93,12 +290,10 @@ if it is not run as root.
 Exit code: `1` if any check errored or is missing (the results are
 incomplete), otherwise `2` if any check requires review, otherwise `0`.
 
-`check-all.sh` does not run `apt-get update`. For a scheduled check,
-refresh APT first. For example, a weekly root crontab entry that logs the
-result:
+For example, a weekly root crontab entry that logs the result:
 
 ```cron
-0 6 * * 1 apt-get update -qq && bash /opt/scripts/check-all.sh > /var/log/server-checks.log 2>&1
+0 6 * * 1 bash /opt/scripts/check-all.sh --refresh > /var/log/server-checks.log 2>&1
 ```
 
 ---
@@ -395,5 +590,8 @@ impacted or unclear; `1` when not run as root or when `nginx -T` fails
 2. If it checks something, make the default mode read-only, accept
    `--check`, and use the [exit codes](#exit-codes) above. Add it to the
    `CHECKS` list at the top of `check-all.sh`.
-3. Add a row to the table at the top of this README and a section
+3. Add its common invocations to the run-on-servers menu in
+   [`lib/actions.txt`](lib/actions.txt).
+4. Add a row to the table at the top of this README and a section
    describing its options and output.
+5. Commit and push: servers download the scripts from GitHub `main`.

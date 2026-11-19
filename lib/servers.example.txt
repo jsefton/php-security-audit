@@ -1,0 +1,9 @@
+# Servers for run-on-servers. The local/ folder is ignored by git.
+# One server per line: <host> <user> [port] [name]
+#   host  IP address or hostname (or a Host alias from ~/.ssh/config)
+#   user  SSH user: root, or a user that can run sudo
+#   port  optional, default 22
+#   name  optional label for menus and log files (default: the host)
+#
+# 203.0.113.10   ubuntu
+# 203.0.113.11   deploy   2222   web-2

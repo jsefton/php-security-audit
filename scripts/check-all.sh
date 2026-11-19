@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Run every read-only check script in this directory and summarise the results.
-# Makes no changes. Run as root so every check can read what it needs.
+# Makes no changes (--refresh only refreshes APT metadata). Run as root so
+# every check can read what it needs.
 set -Euo pipefail
 export LC_ALL=C
 
@@ -14,19 +15,23 @@ CHECKS=(
 
 usage() {
   cat <<'EOF'
-Usage: check-all.sh
+Usage: check-all.sh [--refresh]
 
   Runs each check script in this directory in read-only mode and prints a
   summary. The other scripts must be in the same directory as this one.
 
-  --help  Show help
+  --refresh  Run apt-get update first, so the PHP audit sees the latest
+             package versions (requires root)
+  --help     Show help
 
 Exit codes: 0 = all checks passed; 2 = review required; 1 = a check could not complete.
 EOF
 }
 
+REFRESH=0
 for arg in "$@"; do
   case "$arg" in
+    --refresh) REFRESH=1 ;;
     --help|-h) usage; exit 0 ;;
     *) printf 'Unknown argument: %s\n' "$arg" >&2; usage >&2; exit 1 ;;
   esac
@@ -43,6 +48,21 @@ fi
 declare -a RESULTS=()
 ERRORS=0
 REVIEWS=0
+
+# Refresh APT metadata only; this installs or upgrades nothing.
+if (( REFRESH )); then
+  printf '\n################ apt-get update ################\n'
+  apt-get update </dev/null
+  code=$?
+  if (( code == 0 )); then
+    result=OK
+  else
+    result="ERROR (exit $code)"
+    ERRORS=$((ERRORS + 1))
+  fi
+  RESULTS+=("$(printf '%-17s %s' "$result" 'apt-get update')")
+fi
+
 for entry in "${CHECKS[@]}"; do
   read -r -a cmd <<<"$entry"
   script="$SCRIPT_DIR/${cmd[0]}"
