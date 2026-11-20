@@ -9,6 +9,7 @@ file. `check-all.sh` runs every check in one go and summarises the result.
 | [`scripts/php-security-audit.sh`](scripts/php-security-audit.sh) | Audit APT-installed PHP versions against minimum patched versions | Only with `--upgrade` |
 | [`scripts/php-upload-progress.sh`](scripts/php-upload-progress.sh) | Check `session.upload_progress.enabled` in every `php.ini` | Only with `--patch` |
 | [`scripts/nginx-fastcgi-keep-conn.sh`](scripts/nginx-fastcgi-keep-conn.sh) | Check the loaded nginx configuration for `fastcgi_keep_conn` | No |
+| [`scripts/nginx-http2.sh`](scripts/nginx-http2.sh) | Check whether the loaded nginx configuration enables HTTP/2 | No |
 | [`scripts/apt-update.sh`](scripts/apt-update.sh) | Run `apt-get update --allow-releaseinfo-change` | Refreshes APT lists; installs nothing |
 | [`scripts/reboot.sh`](scripts/reboot.sh) | Check whether the server needs a reboot, and reboot it | Only with `--reboot` |
 
@@ -138,12 +139,13 @@ Actions:
    4) php-upload-progress.sh --check       Check session.upload_progress.enabled
    5) php-upload-progress.sh --patch       Disable it in php.ini (asks on each server)
    6) nginx-fastcgi-keep-conn.sh --check   Check nginx for fastcgi_keep_conn
-   7) apt-update.sh                        apt-get update --allow-releaseinfo-change
-   8) reboot.sh --check                    Check whether a reboot is required
-   9) reboot.sh --reboot                   Reboot in 1 minute (asks on each server)
-  10) (update scripts only)                Install or update the scripts; run nothing
-  11) (other)                              Type a script and its arguments
-  12) (clear local logs)                   Delete local/logs on this machine; no servers
+   7) nginx-http2.sh --check               Check whether nginx enables HTTP/2
+   8) apt-update.sh                        apt-get update --allow-releaseinfo-change
+   9) reboot.sh --check                    Check whether a reboot is required
+  10) reboot.sh --reboot                   Reboot in 1 minute (asks on each server)
+  11) (update scripts only)                Install or update the scripts; run nothing
+  12) (other)                              Type a script and its arguments
+  13) (clear local logs)                   Delete local/logs on this machine; no servers
 Choose an action [1]:
 
 Servers (local/servers.txt):
@@ -270,6 +272,7 @@ script's full output, then prints a summary:
 OK                php-security-audit.sh --check
 REVIEW REQUIRED   php-upload-progress.sh --check
 OK                nginx-fastcgi-keep-conn.sh --check
+OK                nginx-http2.sh --check
 
 1 check(s) require review.
 ```
@@ -281,8 +284,8 @@ sudo bash check-all.sh
 sudo bash check-all.sh --refresh
 ```
 
-Run it as root: the nginx check needs root to read the full nginx
-configuration and reports an error without it. The script prints a warning
+Run it as root: the nginx checks need root to read the full nginx
+configuration and report an error without it. The script prints a warning
 if it is not run as root.
 
 `--refresh` only refreshes APT's package lists; it installs nothing. If
@@ -590,6 +593,68 @@ for `fastcgi_keep_conn` is `off`.
 Exit codes: `0` when not impacted or when nginx is not installed; `2` when
 impacted or unclear; `1` when not run as root or when `nginx -T` fails
 (for example, because of a configuration error).
+
+---
+
+## nginx-http2.sh
+
+Checks whether the configuration nginx actually loads enables HTTP/2. It is
+the equivalent of:
+
+```bash
+sudo nginx -T 2>&1 | grep -E 'listen.*http2|http2 on'
+```
+
+but traces each match back to its file and line and classifies it, so
+commented-out lines and `http2 off;` do not count as enabled.
+
+```bash
+sudo bash nginx-http2.sh
+```
+
+Requires root, for the same reason as
+[`nginx-fastcgi-keep-conn.sh`](#nginx-fastcgi-keep-connsh): `nginx -T` must
+read every included file.
+
+HTTP/2 is enabled by either form:
+
+- `listen ... http2` (for example `listen 443 ssl http2;`). This works in
+  every nginx version, but is deprecated since nginx 1.25.1.
+- `http2 on;` (nginx 1.25.1 and later), in an `http` or `server` block. In
+  `http` it applies to every server.
+
+Example output (illustrative):
+
+```text
+========== NGINX HTTP/2 CHECK ==========
+Matches in nginx -T output (dump line | file:line: text):
+  [ON]          41 | /etc/nginx/sites-enabled/app.conf:3: listen 443 ssl http2;
+  [ON]          42 | /etc/nginx/sites-enabled/app.conf:4: listen [::]:443 ssl http2;
+  [off]        120 | /etc/nginx/sites-enabled/api.conf:6: http2 off;
+  [comment]    121 | /etc/nginx/sites-enabled/api.conf:7: # http2 on;
+
+Result: HTTP/2 ENABLED in 2 place(s).
+```
+
+| Match | Meaning |
+| --- | --- |
+| `[ON]` | An active `listen ... http2` or `http2 on;`. The result is **HTTP/2 ENABLED**. |
+| `[off]` | An active `http2 off;`. |
+| `[comment]` | `http2` only appears in a comment on that line. |
+| `[UNCLEAR]` | A bare `http2` that could not be classified, usually a `listen` split over several lines. Check it by hand; counts for review. |
+
+Lines that only mention `http2` in another way, such as other `http2_*`
+directives, `server_name http2.example.com` or `location /http2/`, are not
+listed.
+
+The check reads the configuration, not the running server: if you changed
+the configuration but did not reload nginx, the result describes the
+configuration nginx will load next. If there are no matches, the result is
+**HTTP/2 NOT ENABLED**: nginx's default is off.
+
+Exit codes: `0` when HTTP/2 is not enabled or when nginx is not installed;
+`2` when HTTP/2 is enabled or a match is unclear; `1` when not run as root
+or when `nginx -T` fails (for example, because of a configuration error).
 
 ---
 

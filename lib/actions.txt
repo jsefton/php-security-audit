@@ -6,6 +6,7 @@ php-security-audit.sh --upgrade    | Upgrade PHP packages (asks on each server)
 php-upload-progress.sh --check     | Check session.upload_progress.enabled
 php-upload-progress.sh --patch     | Disable it in php.ini (asks on each server)
 nginx-fastcgi-keep-conn.sh --check | Check nginx for fastcgi_keep_conn
+nginx-http2.sh --check             | Check whether nginx enables HTTP/2
 apt-update.sh                      | apt-get update --allow-releaseinfo-change
 reboot.sh --check                  | Check whether a reboot is required
 reboot.sh --reboot                 | Reboot in 1 minute (asks on each server)

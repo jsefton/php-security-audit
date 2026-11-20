@@ -11,6 +11,7 @@ CHECKS=(
   'php-security-audit.sh --check'
   'php-upload-progress.sh --check'
   'nginx-fastcgi-keep-conn.sh --check'
+  'nginx-http2.sh --check'
 )
 
 usage() {
