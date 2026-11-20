@@ -10,6 +10,7 @@ ROOT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 LIB_DIR="$ROOT_DIR/lib"
 LOCAL_DIR="$ROOT_DIR/local"
 SERVERS_FILE="$LOCAL_DIR/servers.txt"
+LOG_ROOT="$LOCAL_DIR/logs"
 
 # Archive each server downloads the scripts from.
 DEFAULT_ARCHIVE_URL=https://github.com/jsefton/php-security-audit/archive/refs/heads/main.tar.gz
@@ -31,6 +32,8 @@ The action menu is lib/actions.txt.
   --no-update     Run without updating the scripts first
   --yes           Skip the "Continue?" confirmation
   --list          List the servers in local/servers.txt and exit
+  --clear-logs    Delete the run logs in local/logs on this machine and exit
+                  (no servers are contacted)
   --help          Show help
 
   -- SCRIPT ARGS  Script in scripts/ and its arguments. Skips the action
@@ -54,7 +57,33 @@ trim() {
 
 safe_name() { printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_'; }
 
+# Delete local run logs after confirming. Local only: no server is contacted.
+clear_logs() {
+  local -a runs=()
+  if [[ -d "$LOG_ROOT" ]]; then
+    shopt -s nullglob
+    runs=("$LOG_ROOT"/*)
+    shopt -u nullglob
+  fi
+  if ((${#runs[@]} == 0)); then
+    printf 'No local logs to clear in %s\n' "$LOG_ROOT"
+    return 0
+  fi
+  printf 'Local logs: %d run(s) in %s\n' "${#runs[@]}" "$LOG_ROOT"
+  printf 'This deletes them from this machine only; servers are not touched.\n'
+  if (( ! ASSUME_YES )); then
+    read -r -p 'Delete them? [y/N] ' answer || exit 1
+    case "$answer" in
+      y|Y|yes|YES) ;;
+      *) printf 'Cancelled.\n'; return 0 ;;
+    esac
+  fi
+  rm -rf -- "${runs[@]}" || die "Could not delete everything in $LOG_ROOT"
+  printf 'Deleted %d run(s) of logs.\n' "${#runs[@]}"
+}
+
 SERVERS_ARG=''
+CLEAR_LOGS=0
 UPDATE=1
 UPDATE_ONLY=0
 ASSUME_YES=0
@@ -68,6 +97,7 @@ while (( $# )); do
     --no-update) UPDATE=0; shift ;;
     --yes|-y) ASSUME_YES=1; shift ;;
     --list) LIST_ONLY=1; shift ;;
+    --clear-logs) CLEAR_LOGS=1; shift ;;
     --help|-h) usage; exit 0 ;;
     --) shift; ACTION=("$@"); break ;;
     *) printf 'Unknown argument: %s\n' "$1" >&2; usage >&2; exit 1 ;;
@@ -75,6 +105,13 @@ while (( $# )); do
 done
 if (( UPDATE_ONLY && ! UPDATE )); then die '--update-only and --no-update cannot be combined'; fi
 if (( UPDATE_ONLY && ${#ACTION[@]} )); then die '--update-only cannot be combined with a script'; fi
+if (( CLEAR_LOGS )); then
+  if [[ -n "$SERVERS_ARG" ]] || (( UPDATE_ONLY || ! UPDATE || LIST_ONLY || ${#ACTION[@]} )); then
+    die '--clear-logs can only be combined with --yes'
+  fi
+  clear_logs
+  exit 0
+fi
 command -v ssh >/dev/null || die 'ssh not found'
 for f in remote-run.sh actions.txt servers.example.txt; do
   [[ -f "$LIB_DIR/$f" ]] || die "Missing $LIB_DIR/$f"
@@ -207,11 +244,12 @@ if (( ! UPDATE_ONLY && ${#ACTION[@]} == 0 )); then
   done
   printf '  %2d) %-36s %s\n' $((count + 1)) '(update scripts only)' 'Install or update the scripts; run nothing'
   printf '  %2d) %-36s %s\n' $((count + 2)) '(other)' 'Type a script and its arguments'
+  printf '  %2d) %-36s %s\n' $((count + 3)) '(clear local logs)' 'Delete local/logs on this machine; no servers'
   while true; do
     read -r -p 'Choose an action [1]: ' choice || exit 1
     choice=${choice:-1}
-    if [[ ! "$choice" =~ ^[0-9]+$ ]] || (( 10#$choice < 1 || 10#$choice > count + 2 )); then
-      printf 'Enter a number from 1 to %d.\n' $((count + 2)) >&2
+    if [[ ! "$choice" =~ ^[0-9]+$ ]] || (( 10#$choice < 1 || 10#$choice > count + 3 )); then
+      printf 'Enter a number from 1 to %d.\n' $((count + 3)) >&2
       continue
     fi
     choice=$((10#$choice))
@@ -220,6 +258,9 @@ if (( ! UPDATE_ONLY && ${#ACTION[@]} == 0 )); then
     elif (( choice == count + 1 )); then
       if (( ! UPDATE )); then die '--no-update cannot be combined with updating the scripts'; fi
       UPDATE_ONLY=1
+    elif (( choice == count + 3 )); then
+      clear_logs
+      exit 0
     else
       read -r -p 'Script and arguments (e.g. php-upload-progress.sh --patch --yes): ' custom || exit 1
       read -r -a ACTION <<<"$custom"
@@ -287,7 +328,7 @@ fi
 # With a terminal, allocate one on the server so sudo and the scripts can prompt.
 if [[ -t 0 ]]; then SSH_TTY_OPTS=(-t); else SSH_TTY_OPTS=(-T -n); fi
 
-LOG_DIR="$LOCAL_DIR/logs/$(date +%Y%m%d-%H%M%S)"
+LOG_DIR="$LOG_ROOT/$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$LOG_DIR" || exit 1
 
 RESULTS=()

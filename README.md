@@ -9,6 +9,8 @@ file. `check-all.sh` runs every check in one go and summarises the result.
 | [`scripts/php-security-audit.sh`](scripts/php-security-audit.sh) | Audit APT-installed PHP versions against minimum patched versions | Only with `--upgrade` |
 | [`scripts/php-upload-progress.sh`](scripts/php-upload-progress.sh) | Check `session.upload_progress.enabled` in every `php.ini` | Only with `--patch` |
 | [`scripts/nginx-fastcgi-keep-conn.sh`](scripts/nginx-fastcgi-keep-conn.sh) | Check the loaded nginx configuration for `fastcgi_keep_conn` | No |
+| [`scripts/apt-update.sh`](scripts/apt-update.sh) | Run `apt-get update --allow-releaseinfo-change` | Refreshes APT lists; installs nothing |
+| [`scripts/reboot.sh`](scripts/reboot.sh) | Check whether the server needs a reboot, and reboot it | Only with `--reboot` |
 
 All scripts target Ubuntu/Debian and need Bash 4 or later.
 
@@ -136,8 +138,12 @@ Actions:
    4) php-upload-progress.sh --check       Check session.upload_progress.enabled
    5) php-upload-progress.sh --patch       Disable it in php.ini (asks on each server)
    6) nginx-fastcgi-keep-conn.sh --check   Check nginx for fastcgi_keep_conn
-   7) (update scripts only)                Install or update the scripts; run nothing
-   8) (other)                              Type a script and its arguments
+   7) apt-update.sh                        apt-get update --allow-releaseinfo-change
+   8) reboot.sh --check                    Check whether a reboot is required
+   9) reboot.sh --reboot                   Reboot in 1 minute (asks on each server)
+  10) (update scripts only)                Install or update the scripts; run nothing
+  11) (other)                              Type a script and its arguments
+  12) (clear local logs)                   Delete local/logs on this machine; no servers
 Choose an action [1]:
 
 Servers (local/servers.txt):
@@ -175,6 +181,7 @@ bash run-on-servers.sh --list
 | `-NoUpdate` | `--no-update` | Run without updating the scripts first. |
 | `-Yes` | `--yes` | Skip the `Continue?` confirmation. The scripts' own prompts are separate: add `--yes` after the script name for those. |
 | `-List` | `--list` | List the servers and exit. |
+| `-ClearLogs` | `--clear-logs` | Delete the run logs in `local/logs` on this machine and exit, after confirming (`-Yes` / `--yes` skips that). No server is contacted. |
 | `-Ssh PATH` | | The `ssh.exe` to use. Default: Windows OpenSSH, otherwise `ssh.exe` on `PATH`. |
 
 To change the action menu, edit [`lib/actions.txt`](lib/actions.txt): one
@@ -225,7 +232,9 @@ Logs: local/logs/20261119-184358
 | `SSH FAILED` | Could not connect or log in (ssh exit code 255). |
 
 Each server's full output is saved in
-`local/logs/<date-time>/<number>-<name>.log`.
+`local/logs/<date-time>/<number>-<name>.log`. To delete old logs, pick
+`(clear local logs)` from the menu or run with `-ClearLogs` (Windows) /
+`--clear-logs`. This only touches your machine.
 
 Exit code: `1` if any server errored or could not be reached, otherwise
 `2` if any requires review, otherwise `0`.
@@ -581,6 +590,116 @@ for `fastcgi_keep_conn` is `off`.
 Exit codes: `0` when not impacted or when nginx is not installed; `2` when
 impacted or unclear; `1` when not run as root or when `nginx -T` fails
 (for example, because of a configuration error).
+
+---
+
+## apt-update.sh
+
+Refreshes APT's package lists with:
+
+```bash
+sudo apt-get update --allow-releaseinfo-change
+```
+
+```bash
+sudo bash apt-update.sh
+```
+
+APT refuses to update from a repository whose release information (its
+`Suite`, `Codename`, `Origin`, `Label`, ...) has changed since the last
+update, for example when Debian moves a release from `stable` to
+`oldstable`:
+
+```text
+E: Repository 'http://deb.debian.org/debian bullseye InRelease' changed its 'Suite' value from 'stable' to 'oldstable'
+```
+
+`--allow-releaseinfo-change` accepts the change. It accepts it for every
+configured repository without asking, so use it when you expect the change.
+If `check-all.sh --refresh` reports `apt-get update` as an `ERROR` because
+of this, run `apt-update.sh` first.
+
+Installs and upgrades nothing. Requires root.
+
+Exit codes: `0` when the lists were updated; `1` when not run as root, when
+`apt-get` is missing, or when `apt-get update` fails (its own exit code is
+printed).
+
+---
+
+## reboot.sh
+
+Reports whether the server needs a reboot and, with `--reboot`, reboots it.
+
+```bash
+# Check only (default). Root is not needed.
+bash reboot.sh
+
+# Show the check, confirm, then reboot in 1 minute
+sudo bash reboot.sh --reboot
+
+# Reboot only if a reboot is required, without the prompt, in 10 minutes
+sudo bash reboot.sh --reboot --if-required --yes --delay 10
+
+# Cancel a scheduled reboot
+sudo shutdown -c
+```
+
+| Option | Description |
+| --- | --- |
+| `--check` | Report whether a reboot is required. Makes no changes. This is the default. |
+| `--reboot` | Show the check, list logged-in sessions, ask to confirm, then schedule the reboot. Requires root and systemd. |
+| `--yes` | Skip the confirmation prompt. Valid only with `--reboot`. |
+| `--if-required` | Reboot only if the check finds a reboot is required; otherwise exit `0` without rebooting. Valid only with `--reboot`. |
+| `--delay MINUTES` | Minutes to wait before rebooting, `0` to `9999`. Default `1`. Valid only with `--reboot`. |
+| `--help`, `-h` | Show help. |
+
+A reboot is reported as required when either:
+
+- `/var/run/reboot-required` exists. Ubuntu creates it when an update (a
+  kernel, `libc6`, ...) needs a reboot, and lists the packages in
+  `/var/run/reboot-required.pkgs`, which the report shows.
+- A newer kernel of the same flavour as the running one (for example
+  `-generic`, `-aws`, `-amd64`) is installed in `/boot`. This catches
+  kernel updates on Debian, which does not always create the file above.
+
+Example output (illustrative):
+
+```text
+========== REBOOT CHECK ==========
+Host:            web-1
+Booted:          2026-10-02 06:14:03 (up 7 weeks, 0 days, 3 hours)
+Running kernel:  6.8.0-45-generic
+Newest kernel:   6.8.0-48-generic
+
+Result: REBOOT REQUIRED.
+  - /var/run/reboot-required exists (packages: libc6 linux-image-6.8.0-48-generic)
+  - a newer kernel is installed: 6.8.0-48-generic (running 6.8.0-45-generic)
+```
+
+### What `--reboot` does
+
+1. Prints the check above. With `--if-required`, stops here if no reboot
+   is required.
+2. Lists the logged-in sessions, which the reboot will disconnect.
+3. Asks `Reboot <host> in 1 minute(s)? [y/N]` (skipped with `--yes`).
+   Cancelling reboots nothing and exits as `--check` would.
+4. Runs `shutdown -r +1` (or `+MINUTES`, or `now` for `--delay 0`), with a
+   message naming the user who asked, and exits `0` at once.
+
+The delay lets the script finish and the SSH session close before the
+server goes down, so `run-on-servers` reports `OK`. With `--delay 0` the
+connection is usually cut first, and the runner reports `SSH FAILED` or an
+error even though the reboot went ahead.
+
+For the last 5 minutes before a scheduled reboot, systemd refuses new
+logins for users other than root. To cancel, use a session that is already
+open, or log in as root, and run `sudo shutdown -c`.
+
+Exit codes: `0` when no reboot is required, the reboot was scheduled, or
+`--if-required` found nothing to do; `2` when a reboot is required (in
+`--check`, or when you cancel the prompt); `1` on an error, such as missing
+root, no systemd, or `shutdown` failing.
 
 ---
 

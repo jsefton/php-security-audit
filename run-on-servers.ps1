@@ -33,6 +33,10 @@
 .PARAMETER List
   List the servers in local\servers.txt and exit.
 
+.PARAMETER ClearLogs
+  Delete the run logs in local\logs on this machine and exit. No servers
+  are contacted. Combine with -Yes to skip the confirmation.
+
 .PARAMETER Ssh
   Path to ssh.exe. Default: Windows OpenSSH, otherwise ssh.exe on PATH.
 
@@ -50,6 +54,7 @@ param(
   [switch]$NoUpdate,
   [switch]$Yes,
   [switch]$List,
+  [switch]$ClearLogs,
   [string]$Ssh = ''
 )
 
@@ -60,6 +65,7 @@ $RootDir = $PSScriptRoot
 $LibDir = Join-Path $RootDir 'lib'
 $LocalDir = Join-Path $RootDir 'local'
 $ServersFile = Join-Path $LocalDir 'servers.txt'
+$LogRoot = Join-Path $LocalDir 'logs'
 
 # Archive each server downloads the scripts from.
 $DefaultArchiveUrl = 'https://github.com/jsefton/php-security-audit/archive/refs/heads/main.tar.gz'
@@ -88,9 +94,43 @@ function Join-CommandLine([string[]]$Arguments) {
   return ($parts -join ' ')
 }
 
+# Delete local run logs after confirming. Local only: no server is contacted.
+function Clear-LocalLogs {
+  $runs = @()
+  if (Test-Path -LiteralPath $LogRoot -PathType Container) {
+    $runs = @(Get-ChildItem -LiteralPath $LogRoot)
+  }
+  if ($runs.Count -eq 0) {
+    Write-Host "No local logs to clear in $LogRoot"
+    return
+  }
+  Write-Host ('Local logs: {0} run(s) in {1}' -f $runs.Count, $LogRoot)
+  Write-Host 'This deletes them from this machine only; servers are not touched.'
+  if (-not $Yes) {
+    $answer = Read-Host 'Delete them? [y/N]'
+    if ($answer -notmatch '^(y|yes)$') {
+      Write-Host 'Cancelled.'
+      return
+    }
+  }
+  try {
+    $runs | Remove-Item -Recurse -Force
+  } catch {
+    Exit-WithError "Could not delete everything in ${LogRoot}: $($_.Exception.Message)"
+  }
+  Write-Host ('Deleted {0} run(s) of logs.' -f $runs.Count)
+}
+
 $doUpdateOnly = [bool]$UpdateOnly
 if ($doUpdateOnly -and $NoUpdate) { Exit-WithError '-UpdateOnly and -NoUpdate cannot be combined' }
 if ($doUpdateOnly -and $Action) { Exit-WithError '-UpdateOnly cannot be combined with -Action' }
+if ($ClearLogs) {
+  if ($Servers -or $Action -or $UpdateOnly -or $NoUpdate -or $List) {
+    Exit-WithError '-ClearLogs can only be combined with -Yes'
+  }
+  Clear-LocalLogs
+  exit 0
+}
 foreach ($file in 'remote-run.sh', 'actions.txt', 'servers.example.txt') {
   if (-not (Test-Path -LiteralPath (Join-Path $LibDir $file) -PathType Leaf)) {
     Exit-WithError "Missing $(Join-Path $LibDir $file)"
@@ -248,11 +288,12 @@ if (-not $doUpdateOnly) {
     }
     Write-Host ($row -f ($count + 1), '(update scripts only)', 'Install or update the scripts; run nothing')
     Write-Host ($row -f ($count + 2), '(other)', 'Type a script and its arguments')
+    Write-Host ($row -f ($count + 3), '(clear local logs)', 'Delete local\logs on this machine; no servers')
     while ($true) {
       $choice = Read-Host 'Choose an action [1]'
       if (-not $choice) { $choice = '1' }
-      if ($choice -notmatch '^[0-9]{1,4}$' -or [int]$choice -lt 1 -or [int]$choice -gt $count + 2) {
-        Write-Host "Enter a number from 1 to $($count + 2)."
+      if ($choice -notmatch '^[0-9]{1,4}$' -or [int]$choice -lt 1 -or [int]$choice -gt $count + 3) {
+        Write-Host "Enter a number from 1 to $($count + 3)."
         continue
       }
       $c = [int]$choice
@@ -264,6 +305,10 @@ if (-not $doUpdateOnly) {
         if ($NoUpdate) { Exit-WithError '-NoUpdate cannot be combined with updating the scripts' }
         $doUpdateOnly = $true
         break
+      }
+      if ($c -eq $count + 3) {
+        Clear-LocalLogs
+        exit 0
       }
       $custom = Read-Host 'Script and arguments (e.g. php-upload-progress.sh --patch --yes)'
       $ActionWords = @(Split-Words $custom)
@@ -379,7 +424,7 @@ function Invoke-Ssh([string[]]$Arguments, [string]$LogPath) {
 
 # With a console, allocate a terminal on the server so sudo and the scripts can prompt.
 $interactive = -not [Console]::IsInputRedirected
-$LogDir = Join-Path $LocalDir ('logs\' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
+$LogDir = Join-Path $LogRoot (Get-Date -Format 'yyyyMMdd-HHmmss')
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 
 $results = New-Object 'System.Collections.Generic.List[string]'
